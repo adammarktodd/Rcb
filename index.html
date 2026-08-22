@@ -941,6 +941,17 @@ html,body{overscroll-behavior-y:none}
 .nch{flex:none;background:var(--navy);color:#fff;font-size:12px;font-weight:700;
   padding:4px 8px;border-radius:5px;letter-spacing:.02em;min-width:44px;text-align:center}
 .origin .chg{color:var(--blue);font-weight:700;margin-left:6px}
+/* Once a location is set the picker is just an obstacle between the user and
+   the list, so the whole header collapses to one line until Change is tapped. */
+.nearhead.compact{padding:9px var(--sp4);display:flex;align-items:center;gap:8px}
+.nearhead.compact #gps,
+.nearhead.compact #manual,
+.nearhead.compact .nfine,
+.nearhead.compact .pickwrap{display:none}
+.nearhead.compact .origin{margin-top:0;flex:1;min-width:0;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nearhead.compact .err:empty{display:none}
+.nearhead.compact .origin .chg{margin-left:8px;white-space:nowrap}
 
 .sc-head{background:var(--navy);color:#fff;padding:10px var(--sp4);font-size:12px;font-weight:700;
   letter-spacing:.04em}
@@ -1040,7 +1051,7 @@ html,body{overscroll-behavior-y:none}
       <span class="ch">&#8250;</span></button>
     <button class="mrow" id="mnsave">
       <span class="mi"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span>
-      <span class="mt"><b>Save this page to your phone</b><i>Works with no signal once saved</i></span>
+      <span class="mt"><b>Install on your phone</b><i>Chrome, Edge or Safari &middot; works with no signal</i></span>
       <span class="ch">&#8250;</span></button>
     <a class="mrow" id="mncontactus" href="mailto:highwaysradiosupport@gov.bc.ca">
       <span class="mi"><svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M3.5 7.5l8.5 5.5 8.5-5.5"/></svg></span>
@@ -2530,9 +2541,9 @@ var RANKED = false;
 function rankFrom(lat,lon,label,fromMemory){
   RANKED = true;
   lsSet("rcbOrigin", JSON.stringify({y:lat, x:lon, l:label}));
-  $("norigin").innerHTML = "Ranked from <b>"+esc(label)+"</b>"+
-    (fromMemory ? " \u2014 from last time." : ".")+
+  $("norigin").innerHTML = "From <b>"+esc(label)+"</b>"+
     ' <span class="chg" id="chgorigin">Change</span>';
+  collapsePicker();
   var list = SITES.map(function(s){
     return { s:s, d:hav(lat,lon,s.y,s.x), b:bearing(lat,lon,s.y,s.x) };
   }).sort(function(a,b){ return a.d-b.d; }).slice(0,40);
@@ -3780,18 +3791,23 @@ $("mnbasics").addEventListener("click", function(){
     fld("In person","Free group training (6&ndash;10 people, about 2 hours, at your office) is available from the Radio &amp; Telecommunications Branch.")+'</div>');
 });
 $("mnsave").addEventListener("click", function(){
-  guideSheet("Save this page",
+  guideSheet("Install on your phone",
     '<div class="hero"><h2>Keep the directory on your phone</h2>'+
-    '<div class="sub">Everything is inside this one file &mdash; once saved it opens with no signal.</div></div>'+
+    '<div class="sub">Installed, it opens like an app and works with no signal.</div></div>'+
     '<div class="dsect"><div class="rule"></div><h5>Android &middot; Chrome</h5>'+
-    fld("Option 1", "Menu (\u22EE) \u2192 Add to Home screen. Opens like an app.")+
-    fld("Option 2", "Menu (\u22EE) \u2192 Download. Opens from your Files app.")+'</div>'+
+    fld("Install it", "Menu (\u22EE) \u2192 <b>Install app</b>, or <b>Add to Home screen</b>. Confirm, then open it from the home screen.")+
+    fld("Check it worked", "Opened from the home screen there is <b>no address bar</b> \u2014 just the blue header. If the address bar is still showing you got a bookmark, not the app.")+'</div>'+
+    '<div class="dsect"><div class="rule"></div><h5>Android &middot; Edge</h5>'+
+    fld("Install it", "Menu (\u2026) at the bottom \u2192 <b>Add to phone</b>. Some versions call it <b>Install app</b> or <b>Add to Home screen</b>.")+
+    fld("Check it worked", "Same test \u2014 no address bar when you open it from the home screen.")+
+    fld("If it will not install", "Load the page once and let it finish before trying, then reopen the menu. Edge offers a plain shortcut more readily than Chrome does, so the address-bar check matters here.")+'</div>'+
     '<div class="dsect"><div class="rule"></div><h5>iPhone &middot; Safari</h5>'+
-    fld("Option 1", "Share \u2192 Add to Home Screen.")+
-    fld("Option 2", "Share \u2192 Save to Files.")+'</div>'+
+    fld("Install it", "Share \u2192 <b>Add to Home Screen</b>.")+
+    fld("Note", "Must be Safari. Chrome and Edge on iPhone cannot install a web app.")+'</div>'+
     '<div class="dsect"><div class="rule"></div><h5>Good to know</h5>'+
-    fld("Snapshot", "This is a copy of the directory, not live data. Check the date in the top corner and re-save when a newer version is published.")+
-    fld("Favourites", "Stars you set are stored on your device only.")+'</div>');
+    fld("Works offline", "Once installed it opens with no signal. The first load needs a connection to store everything.")+
+    fld("Updates", "When a new edition is published you will see a prompt at the bottom of the screen. You can also tap the \u21bb in the top corner any time you have signal.")+
+    fld("Favourites", "Stars you set are stored on your device only, and are not carried across if you reinstall. Menu \u2192 Favourites backup gives you a code to move them.")+'</div>');
 });
 $("mnabout").addEventListener("click", function(){
   guideSheet("About",
@@ -4651,7 +4667,16 @@ $("mlegend").addEventListener("click", function(e){
 var GPS_OK = !!(navigator.geolocation &&
                (window.isSecureContext === undefined || window.isSecureContext));
 
-function showPicker(){ $("pickwrap").classList.add("on"); }
+function showPicker(){
+  $("pickwrap").classList.add("on");
+  var nh = document.querySelector(".nearhead");
+  if(nh) nh.classList.remove("compact");
+}
+function collapsePicker(){
+  var nh = document.querySelector(".nearhead");
+  if(nh) nh.classList.add("compact");
+  $("pickwrap").classList.remove("on");
+}
 $("manual") && ($("manual").textContent = "I know where I am\u2026");
 $("manual").addEventListener("click", showPicker);
 
