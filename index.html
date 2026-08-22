@@ -2059,6 +2059,57 @@ function elevAt(lat, lon){
   return px(x0,y0)*(1-tx)*(1-ty) + px(x1,y0)*tx*(1-ty) +
          px(x0,y1)*(1-tx)*ty + px(x1,y1)*tx*ty;
 }
+/* Open water: the DEM stores metres/16, so anything under 16 m reads as 0 -
+   the Fraser delta is indistinguishable from the Pacific. The basemap raster
+   does separate them (water is a pale blue with blue clearly above red), so
+   the coastline comes from there. Validated against 16 known points: 15 right,
+   the miss being Okanagan Lake, which is narrower than one cell. */
+var WGRID = null;
+function waterGrid(){
+  if(WGRID !== null) return WGRID;
+  var im = document.querySelector(".terrain");
+  if(!im || !im.naturalWidth){ WGRID = false; return false; }
+  try{
+    var GW = 1200, GH = 702;                 /* match the DEM grid, ~1.5 km cells */
+    var cv = document.createElement("canvas");
+    cv.width = GW; cv.height = GH;
+    var cx = cv.getContext("2d");
+    cx.drawImage(im, 0, 0, GW, GH);
+    var d = cx.getImageData(0, 0, GW, GH).data;
+    var m = new Uint8Array(GW * GH);
+    for(var i = 0, n = GW * GH; i < n; i++){
+      /* blue channel clearly above red = water */
+      if(d[i * 4 + 2] - d[i * 4] > 12) m[i] = 1;
+    }
+    WGRID = { w: GW, h: GH, m: m };
+  }catch(_e){ WGRID = false; }
+  return WGRID;
+}
+function isWaterAt(lat, lon){
+  var g = waterGrid(); if(!g) return false;
+  var x = ((lon + 134) / 20 * (g.w - 1)) | 0;
+  var y = ((60 - lat) / 11.7 * (g.h - 1)) | 0;
+  if(x < 0 || y < 0 || x >= g.w || y >= g.h) return false;
+  return g.m[y * g.w + x] === 1;
+}
+/* Knife-edge diffraction. VHF bends over ridges, so a path that fails
+   line-of-sight is not necessarily dead - it is attenuated. Without this the
+   model claims nothing at all behind every ridge, which is plainly wrong. */
+var RF_LAMBDA = 299.792458 / 157.0;          /* metres at 157 MHz */
+function diffLossDb(h, d1, d2){
+  var a = d1 * 1000, b = d2 * 1000;
+  if(a <= 0 || b <= 0) return 99;
+  var v = h * Math.sqrt(2 * (a + b) / (RF_LAMBDA * a * b));
+  if(v <= -0.78) return 0;
+  return 6.9 + 20 * Math.log(Math.sqrt((v - 0.1) * (v - 0.1) + 1) + v - 0.1) / Math.LN10;
+}
+
+/* elevAt() returns 0 outside the model, which a viewshed reads as a flat plain
+   at sea level - so coverage floods everything past the DEM edge and draws a
+   straight line at lat 48.3. Callers that MODEL terrain must stop instead. */
+function inDEM(lat, lon){
+  return lon >= -134 && lon <= -114 && lat >= 48.3 && lat <= 60;
+}
 function losProfile(oy, ox, sy, sx, siteElev){
   var g = elevGrid(); if(!g) return null;
   var N = 140, D = hav(oy, ox, sy, sx);
@@ -2545,29 +2596,33 @@ function showCoverage(st){
   setTimeout(function(){ computeCoverage(st, inner); }, 30);
 }
 function computeCoverage(st, inner){
-  /* Radial viewshed with Fresnel grading.
-     Three corrections over the first version:
-      - site height comes from the SURVEYED elevation when we have it; the DEM
-        cell is ~1.1 x 1.85 km and averages summits away (median -248 m)
-      - radius follows the radio horizon instead of a flat 90 km
-      - the mask is built opaque and composited ONCE, so alpha means something */
+  /* Radial viewshed, three tiers.
+       clear    - line of sight with 60% of the first Fresnel zone free
+       marginal - line of sight but inside the Fresnel zone (works, unreliably)
+       shadow   - no line of sight, but knife-edge diffraction under 15 dB
+     Open water is computed but not painted: propagation over sea is real and
+     unobstructed, so it swamped the display while telling nobody anything.
+     Ceiling on accuracy is the terrain model at roughly 1-2 km per cell. */
   var surveyed = parseFloat(st.e);
-  var demH = elevAt(st.y, st.x); if(demH === null) demH = 0;
+  var demH = elevAt(st.y, st.x);
   var siteGround = (isFinite(surveyed) && surveyed > 0) ? surveyed : demH;
   var h0 = siteGround + 10;                       /* 10 m mast */
 
-  /* k=4/3 horizon to a 2 m mobile, clamped to something drawable */
-  var R = 4.12 * (Math.sqrt(Math.max(h0, 1)) + Math.SQRT2);
-  R = Math.max(35, Math.min(140, R));
+  var horizon = 4.12 * (Math.sqrt(Math.max(h0, 1)) + Math.SQRT2);
+  var R = Math.max(35, Math.min(220, horizon));
   var STEP = Math.max(0.35, R / 300);
   var RAYS = 360, SZ = 560, ppk = (SZ / 2) / R;
-  var FGHZ = 0.157;                               /* VHF mid-band */
+  var DIFF_DB = 15;                               /* diffraction budget */
 
   var cv = document.createElement("canvas"); cv.width = SZ; cv.height = SZ;
   var cx = cv.getContext("2d");
-  if(!cx){ toast("Couldn\u2019t draw the overlay."); return; }
+  var lo = document.createElement("canvas"); lo.width = SZ; lo.height = SZ;
+  var lx = lo.getContext("2d");                   /* line-of-sight only, for the outline */
+  if(!cx || !lx){ toast("Couldn\u2019t draw the overlay."); return; }
   var col = RC[st.g] || "#336";
   var t = Math.PI / 180, cosLat = Math.cos(st.y * t);
+  cx.fillStyle = col; lx.fillStyle = col;
+  var nC = 0, nM = 0, nS = 0;
 
   for(var a = 0; a < RAYS; a++){
     var az = a * (360 / RAYS) * t;
@@ -2576,43 +2631,48 @@ function computeCoverage(st, inner){
     for(var d = STEP; d <= R; d += STEP){
       var lat = st.y + (d * cA) / 111.195;
       var lon = st.x + (d * sA) / (111.195 * cosLat);
-      var he = elevAt(lat, lon); if(he === null) he = 0;
+      if(!inDEM(lat, lon)) break;                 /* off the model - claim nothing */
+      var he = elevAt(lat, lon);
       var drop = d * d * 0.0589;                  /* earth bulge, k=4/3 */
       var terrSlope = (he - drop - h0) / d;
       var rxSlope   = (he + 2 - drop - h0) / d;   /* 2 m mobile antenna */
-      if(rxSlope >= maxSlope){
-        /* vertical gap between the receiver and the grazing ray, metres */
-        var gap = (rxSlope - maxSlope) * d;
-        if(!isFinite(gap)) gap = 9999;
-        /* 60% of the first Fresnel zone is the usual clearance criterion */
-        var d1 = Math.min(dObs, d - 0.001), d2 = d - d1;
-        var f1 = 17.32 * Math.sqrt(Math.max(d1 * d2, 0.001) / (FGHZ * d));
-        var solid = gap >= 0.6 * f1;
+
+      var gap = (maxSlope === -Infinity) ? 9999 : (rxSlope - maxSlope) * d;
+      var d1 = Math.min(dObs, d - 0.001), d2 = Math.max(d - d1, 0.001);
+      var f1 = 17.32 * Math.sqrt(Math.max(d1 * d2, 0.001) / (0.157 * d));
+
+      var tier = 0;                               /* 0 none, 1 clear, 2 marginal, 3 shadow */
+      if(gap >= 0.6 * f1) tier = 1;
+      else if(gap >= 0) tier = 2;
+      else if(diffLossDb(-gap * d1 / d, d1, d2) <= DIFF_DB) tier = 3;
+
+      if(tier && !isWaterAt(lat, lon)){
         var px = SZ / 2 + d * sA * ppk, py = SZ / 2 - d * cA * ppk;
         var cw = Math.max(2.8, d * ppk * 0.0175 + 1.2);
-        cx.fillStyle = col;
-        cx.globalAlpha = solid ? 1 : 0.42;         /* marginal drawn lighter */
+        cx.globalAlpha = tier === 1 ? 1 : (tier === 2 ? 0.45 : 0.24);
         cx.fillRect(px - cw / 2, py - cw / 2, cw, cw);
+        if(tier !== 3){                           /* outline follows real line of sight */
+          lx.globalAlpha = 1;
+          lx.fillRect(px - cw / 2, py - cw / 2, cw, cw);
+        }
+        if(tier === 1) nC++; else if(tier === 2) nM++; else nS++;
       }
       if(terrSlope > maxSlope){ maxSlope = terrSlope; dObs = d; }
     }
   }
 
-  /* Composite the finished mask ONCE so overlapping cells cannot stack.
-     This is the single place coverage strength is set - .covx is opacity:1
-     deliberately, so there is no second multiplier hiding in the CSS. */
+  /* Composite ONCE - overlapping cells must not stack. This is the single
+     place coverage strength is set; .covx is opacity:1 deliberately. */
   var out = document.createElement("canvas"); out.width = SZ; out.height = SZ;
   var ox = out.getContext("2d");
   ox.globalAlpha = 0.52;
   ox.drawImage(cv, 0, 0);
-  /* crisp edge: redraw the mask offset by a pixel in four directions and keep
-     only what falls outside, giving the covered area a defined outline */
   var edge = document.createElement("canvas"); edge.width = SZ; edge.height = SZ;
   var eg = edge.getContext("2d");
-  eg.drawImage(cv, 0, 0);
+  eg.drawImage(lo, 0, 0);
   eg.globalCompositeOperation = "destination-out";
-  eg.drawImage(cv, -1.5, 0); eg.drawImage(cv, 1.5, 0);
-  eg.drawImage(cv, 0, -1.5); eg.drawImage(cv, 0, 1.5);
+  eg.drawImage(lo, -1.5, 0); eg.drawImage(lo, 1.5, 0);
+  eg.drawImage(lo, 0, -1.5); eg.drawImage(lo, 0, 1.5);
   ox.globalAlpha = 0.85;
   ox.drawImage(edge, 0, 0);
 
@@ -2628,12 +2688,13 @@ function computeCoverage(st, inner){
   if(terr && terr.nextSibling) inner.insertBefore(im, terr.nextSibling);
   else inner.appendChild(im);
   COV.k = st.uid;
-  $("maphint").textContent = "Estimated coverage from " + st.n + " \u2014 " +
-    Math.round(siteGround) + " m site" +
-    (isFinite(surveyed) && surveyed > 0 ? "" : " (from terrain model)") +
-    " + 10 m mast, out to " + Math.round(R) + " km. Solid = clear path, " +
-    "pale = marginal. Terrain model is about 1\u20132 km per cell, so narrow " +
-    "gullies and single ridges may be missed. Tap another pin to move it.";
+  $("maphint").innerHTML =
+    "<b>" + esc(st.n) + "</b> \u2014 " + Math.round(siteGround) + " m" +
+    (isFinite(surveyed) && surveyed > 0 ? " surveyed" : " (from terrain model)") +
+    " + 10 m mast, to " + Math.round(R) + " km." +
+    " <b>Solid</b> clear path \u00b7 <b>mid</b> marginal \u00b7 <b>faint</b> behind terrain," +
+    " reachable by diffraction. Open water is not shown. Terrain model is about" +
+    " 1\u20132 km per cell, so narrow gullies and single ridges may be missed.";
 }
 function showOnMap(s){
   buildMap(); mapOrigin();
@@ -3524,6 +3585,11 @@ if(location.protocol === "http:" || location.protocol === "https:"){
 if(location.hash === "#map"){
   setTimeout(function(){ try{ $("mapbtn").click(); }catch(_e){} }, 120);
 }
+/* ===========================================================================
+   THE HOSTED COPY. Set this to your GitHub Pages address, with the trailing
+   slash. A downloaded copy has no way to update itself, so the refresh button
+   sends people here instead. Leave "" and refresh only works on the hosted app.
+   =========================================================================== */
 var CANONICAL = "";
 function toast(msg){
   var t = document.querySelector(".toast");
@@ -3533,19 +3599,88 @@ function toast(msg){
   clearTimeout(t._tm);
   t._tm = setTimeout(function(){ t.classList.remove("on"); }, 2600);
 }
+/* ---------- update detection ----------------------------------------------
+   The service worker only announces itself when sw.js CHANGES, and only on a
+   fresh navigation. Uploading a new index.html alone would tell nobody. So the
+   real signal is version.json, fetched with no-store and compared against the
+   build this device last accepted. Only version.json needs editing on release.
+--------------------------------------------------------------------------- */
+function doAppRefresh(){
+  var done = false;
+  function go(){
+    if(done) return; done = true;
+    try{ lsSet("rcbBuild", window._newBuild || lsGet("rcbBuild") || ""); }catch(_e){}
+    location.reload();
+  }
+  if(navigator.serviceWorker && navigator.serviceWorker.controller){
+    toast("Fetching the latest version\u2026");
+    var ch = function(ev){
+      if(ev.data && ev.data.type === "refreshed"){
+        navigator.serviceWorker.removeEventListener("message", ch);
+        go();
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", ch);
+    try{ navigator.serviceWorker.controller.postMessage({ type: "refresh" }); }
+    catch(_e){ go(); return; }
+    navigator.serviceWorker.getRegistration().then(function(reg){
+      if(reg) reg.update()["catch"](function(){});
+    })["catch"](function(){});
+    setTimeout(go, 6000);            /* never leave the button spinning */
+  } else {
+    setTimeout(go, 320);
+  }
+}
+function showUpdatePrompt(txt){
+  if(document.querySelector(".swup")) return;
+  var b = document.createElement("button");
+  b.className = "swup";
+  b.textContent = txt || "A newer version is ready \u2014 tap to update";
+  b.addEventListener("click", function(){ b.remove(); doAppRefresh(); });
+  document.body.appendChild(b);
+}
+var _lastCheck = 0;
+function checkForUpdate(force){
+  if(location.protocol.indexOf("http") !== 0) return;
+  var now = Date.now();
+  if(!force && now - _lastCheck < 5 * 60 * 1000) return;
+  _lastCheck = now;
+  fetch("version.json?t=" + now, { cache: "no-store" })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(v){
+      if(!v || !v.build) return;
+      var seen = lsGet("rcbBuild");
+      if(!seen){ lsSet("rcbBuild", v.build); return; }   /* first run - no prompt */
+      if(seen !== v.build){
+        window._newBuild = v.build;
+        showUpdatePrompt("Version " + v.released + " is available \u2014 tap to update");
+      }
+    })["catch"](function(){});
+}
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState === "visible") checkForUpdate(false);
+});
+setTimeout(function(){ checkForUpdate(true); }, 3000);
+
 $("hdrefresh").addEventListener("click", function(){
   var b = $("hdrefresh");
   b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin");
-  var here = location.protocol;
-  if(CANONICAL && here.indexOf("http") !== 0){
-    location.href = CANONICAL + (CANONICAL.indexOf("?")<0 ? "?v=" : "&v=") + Date.now();
+  var hosted = location.protocol.indexOf("http") === 0;
+
+  /* A saved copy cannot update itself - send it to the hosted one. */
+  if(!hosted){
+    if(CANONICAL){
+      toast("Opening the latest version\u2026");
+      setTimeout(function(){
+        location.href = CANONICAL + (CANONICAL.indexOf("?") < 0 ? "?v=" : "&v=") + Date.now();
+      }, 320);
+    } else {
+      toast("This saved copy can\u2019t update itself \u2014 open it from the web address.");
+    }
     return;
   }
-  if(here.indexOf("http") === 0){
-    setTimeout(function(){ location.replace(location.pathname + "?v=" + Date.now()); }, 380);
-    return;
-  }
-  toast("No update link yet \u2014 this copy is the " + "18 August 2026" + " edition.");
+
+  doAppRefresh();
 });
 if($("mnreport")) $("mnreport").addEventListener("click", function(){
   var f = $("reportframe");
@@ -3774,7 +3909,7 @@ function buildMap(){
   lg += mrow("mltrk", '<span class="mdtk"></span>', "Trunk outlines",
              "", !window.MTRK_OFF);
   lg += mrow("mlcov", '<span class="mdcv"></span>', "Coverage",
-             "Follows the pin you tap", !!window.MCOV_ON);
+             "Terrain estimate \u00b7 follows the pin you tap", !!window.MCOV_ON);
 
   lg += msec("Base map", "On this device");
   lg += mrow("mlhwy", '<span class="mdln"></span>', "Highways", "", !window.MHWY_OFF);
@@ -4693,14 +4828,8 @@ if ("serviceWorker" in navigator &&
       var nw = reg.installing; if(!nw) return;
       nw.addEventListener("statechange", function(){
         if(nw.state === "installed" && navigator.serviceWorker.controller){
-          var b = document.createElement("button");
-          b.className = "swup";
-          b.textContent = "A newer version is ready \u2014 tap to load it";
-          b.addEventListener("click", function(){
-            try{ nw.postMessage("skipWaiting"); }catch(_e){}
-            location.reload();
-          });
-          document.body.appendChild(b);
+          try{ nw.postMessage("skipWaiting"); }catch(_e){}
+          showUpdatePrompt();
         }
       });
     });
