@@ -1,3 +1,0 @@
-# Internal ministry tool. Not for search indexing.
-User-agent: *
-Disallow: /
