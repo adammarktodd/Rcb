@@ -3580,9 +3580,13 @@ if(location.protocol === "http:" || location.protocol === "https:"){
   var mlink = document.querySelector('link[rel="manifest"]');
   if(mlink) mlink.setAttribute("href", "rcb-b3.webmanifest");
 }
-/* launch route: a home-screen shortcut saved with #map opens straight
-   to the map + channel HUD - the closest a web page gets to a widget */
-if(location.hash === "#map"){
+/* Launch route. The app icon's "Repeater map" shortcut uses #repeatermap.
+   NOTE: #map is deliberately NOT honoured any more. Installs made before the
+   start_url changed have "./#map" baked into the WebAPK by Android and it is
+   not rewritten when the manifest changes, so honouring it meant those copies
+   kept opening on the map however the manifest read. Ignoring it makes the
+   directory the landing screen for old and new installs alike. */
+if(location.hash === "#repeatermap"){
   setTimeout(function(){ try{ $("mapbtn").click(); }catch(_e){} }, 120);
 }
 /* ===========================================================================

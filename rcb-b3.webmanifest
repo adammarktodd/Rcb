@@ -37,7 +37,7 @@
     {
       "name": "Repeater map",
       "short_name": "Map",
-      "url": "./#map",
+      "url": "./#repeatermap",
       "icons": [
         {
           "src": "rcb-icon-b2-192.png",
