@@ -1,5 +1,0 @@
-{
-  "build": "2026-08-22-c",
-  "released": "22 August 2026",
-  "notes": "Always opens on the directory, even for installs made before the change. Map is on the app-icon shortcut."
-}
