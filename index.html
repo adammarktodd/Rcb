@@ -1983,6 +1983,24 @@ function fld(k,v,cls){ return v ? '<div class="fld"><dt>'+k+'</dt><dd class="'+(
 function telHref(d){ return d ? "tel:"+d : ""; }
 
 function nearestTrunk(lat, lon){
+  if(CONTRACTOR){
+    /* ⚠️ hav() against sites with no coordinates returns NaN, so every
+       "d < best.d" was false and this kept the FIRST site it saw - 4 Mile,
+       Bella Coola - and offered it to every single contact. Use the
+       build-time grid, which knows the answer, and the trunk's own phone. */
+    var sv = servingAt(lat, lon);
+    if(!sv) return null;
+    var tn = (sv.nearest && sv.nearest.trunk) || sv.trunk;
+    if(!tn) return null;
+    var area = null, i;
+    for(i = 0; i < TAREAS.length; i++){
+      if(TAREAS[i].u === tn && TAREAS[i].p){ area = TAREAS[i]; break; }
+    }
+    if(!area) return null;
+    var db = distBandAt(lat, lon);
+    return { trunk: tn, phone: area.p, band: db ? db.text : "",
+             site: (sv.nearest && sv.nearest.site) || "" };
+  }
   var best = null;
   SITES.forEach(function(st){
     if(!st._tp) return;
@@ -1998,8 +2016,20 @@ function trunkBar(){
     if(!n) return "";
     var who = (o.l === "your current location") ? "you"
       : esc(String(o.l||"").replace(/^near\s+/i,"") || "last location");
-    return '<button class="trunkbar" id="tbgo">'+
-      '<span class="ti"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 010 8.49"/><path d="M7.76 16.24a6 6 0 010-8.49"/><path d="M19.07 4.93a10 10 0 010 14.14"/><path d="M4.93 19.07a10 10 0 010-14.14"/></svg></span><span class="tt"><b>Call nearest trunk phone</b>'+
+    var ICON = '<span class="ti"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 010 8.49"/><path d="M7.76 16.24a6 6 0 010-8.49"/><path d="M19.07 4.93a10 10 0 010 14.14"/><path d="M4.93 19.07a10 10 0 010-14.14"/></svg></span>';
+    if(CONTRACTOR){
+      /* Say plainly that this is the trunk covering the READER. Whether it
+         should instead be the trunk covering the person being called is a
+         real question, and needs each person's location resolved to a trunk
+         first - see the note in the addendum. Until then, do not imply it. */
+      return '<button class="trunkbar" id="tbgo">'+ ICON +
+        '<span class="tt"><b>Call the trunk phone where '+who+' '+
+        (who === "you" ? "are" : "is")+'</b>'+
+        '<i>'+esc(n.trunk)+(n.band ? ' &middot; nearest site '+esc(n.site) : '')+
+        '</i></span><span class="ch">&#8250;</span></button>';
+    }
+    return '<button class="trunkbar" id="tbgo">'+ ICON +
+      '<span class="tt"><b>Call nearest trunk phone</b>'+
       '<i>'+esc(n.s.n)+' &middot; '+(n.d<10?n.d.toFixed(1):Math.round(n.d))+' km '+
       brgS(n.b)+' of '+who+'</i></span><span class="ch">&#8250;</span></button>';
   }
@@ -2014,6 +2044,25 @@ function trunkBar(){
 }
 
 function showTrunkCard(n){
+  if(CONTRACTOR){
+    /* n has no site record - it carries a trunk name and its phone. The
+       repeater-code sequence needs a site code this edition does not ship, so
+       show the dialling number and say which trunk it reaches. */
+    window.TCSITE = null;
+    var hc = '<h3>' + esc(n.trunk) + '</h3>' +
+      '<div class="tsub">Trunk phone ' + esc(n.phone) +
+      (n.site ? ' &middot; nearest site ' + esc(n.site) : '') + '</div>' +
+      '<div class="tcode">CALL THIS NUMBER TO REACH RADIOS ON THIS TRUNK</div>' +
+      '<a class="b pri" href="' + telHref(telDigits(n.phone)) + '">Call ' +
+      esc(n.phone) + '</a>' +
+      '<div class="nfine" style="border-top:none;margin-top:10px">After the ' +
+      'answer tone you will need the repeater code for the site you want. ' +
+      'Site codes are not listed in this edition &mdash; ask dispatch, or use ' +
+      'the printed call book.</div>';
+    $("tcard").innerHTML = hc;
+    $("tcscrim").classList.add("on");
+    return;
+  }
   window.TCSITE = n.s;
   var digits = String(n.s.k||"").split("").filter(function(ch){ return /[0-9]/.test(ch); });
   var codeToks = digits.map(function(d){
@@ -4703,6 +4752,17 @@ var HUDSITE = null;
 function chanBest(){
   var o = null; try{ o = JSON.parse(lsGet("rcbOrigin")||"null"); }catch(_e){}
   if(!o || typeof o.y !== "number") return null;
+  if(CONTRACTOR){
+    /* No site coordinates to rank by - hav() returned NaN, every comparison
+       was false, and the header chip fell through to "CH ?". The build-time
+       serving grid already knows the answer. */
+    var sv = servingAt(o.y, o.x);
+    var nr = sv && sv.nearest && sv.nearest.ch ? sv.nearest : null;
+    if(!nr) return null;
+    var db = distBandAt(o.y, o.x);
+    return { s: { v: nr.ch, n: nr.site, u: nr.trunk }, d: null,
+             band: db ? db.text : "" };
+  }
   var best = null, bd = 1e9;
   SITES.forEach(function(st){
     if(!st.v) return;
@@ -4737,6 +4797,21 @@ function chanHud(){
       '<i>tap to set your location</i></span>';
     return;
   }
+  if(CONTRACTOR){
+    /* Same fix as chanChip: rank from the build-time grid, and show the
+       coarse band rather than a distance this edition does not carry. */
+    var svh = servingAt(o.y, o.x);
+    var nrh = svh && svh.nearest && svh.nearest.ch ? svh.nearest : null;
+    if(!nrh){ el.style.display = "none"; HUDSITE = null; return; }
+    HUDSITE = null;                       /* no site record to open */
+    var dbh = distBandAt(o.y, o.x);
+    el.style.display = "flex";
+    el.innerHTML = '<span class="cn">Ch ' + esc(nrh.ch) + '</span>' +
+      '<span class="cs2"><b>' + esc(nrh.site) + '</b>' +
+      '<i>' + esc(nrh.trunk || "") + (dbh ? ' \u00b7 ' + esc(dbh.text) : "") +
+      '</i></span>';
+    return;
+  }
   var best = null, bd = 1e9;
   SITES.forEach(function(st){
     if(!st.v) return;
@@ -4751,6 +4826,16 @@ function chanHud(){
     '<i>' + esc(best.u || "") + ' \u00b7 ' + bd.toFixed(0) + ' km</i></span>';
 }
 $("chanhud").addEventListener("click", function(){
+  if(CONTRACTOR){
+    /* No site to open. Show the area they are standing in instead. */
+    var oc = null; try{ oc = JSON.parse(lsGet("rcbOrigin")||"null"); }catch(_e){}
+    if(oc && typeof oc.y === "number"){
+      var rc = trunkAt(oc.y, oc.x);
+      if(rc){ selectTrunkArea(TAREAS.indexOf(rc.area), true, [oc.y, oc.x]); return; }
+    }
+    if(GPS_OK){ $("mzloc").click(); }
+    return;
+  }
   if(HUDSITE){ openSite(HUDSITE); return; }
   if(GPS_OK){ $("mzloc").click(); }
   else {
@@ -4761,6 +4846,21 @@ $("chanhud").addEventListener("click", function(){
 
 $("hdch").addEventListener("click", function(){
   var r = chanBest();
+  if(CONTRACTOR){
+    /* showOnMap() needs a position. Open the map on the user's own area. */
+    var oh = null; try{ oh = JSON.parse(lsGet("rcbOrigin")||"null"); }catch(_e){}
+    if(r && oh && typeof oh.y === "number"){
+      $("mapbtn").click();
+      setTimeout(function(){
+        var rh = trunkAt(oh.y, oh.x);
+        if(rh) selectTrunkArea(TAREAS.indexOf(rh.area), true, [oh.y, oh.x]);
+      }, 260);
+      return;
+    }
+    if(GPS_OK){ $("mapbtn").click(); setTimeout(function(){ $("mzloc").click(); }, 250); }
+    else $("nearbtn").click();
+    return;
+  }
   if(r){ showOnMap(r.s); return; }
   if(GPS_OK){ $("mapbtn").click(); setTimeout(function(){ $("mzloc").click(); }, 250); }
   else $("nearbtn").click();
