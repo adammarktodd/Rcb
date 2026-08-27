@@ -1,5 +1,5 @@
 {
-  "build": "2026-08-26-2358",
-  "released": "26 August 2026",
-  "notes": "Channel indicator now updates when you set a location by hand, and while driving."
+  "build": "2026-08-27-2245",
+  "released": "27 August 2026",
+  "notes": "Staff, contractor and crew data refreshed. Contractors 590 to 607. Crew names now carried. Office contact detail retained from the previous release where the 27 Aug export returned blank."
 }
