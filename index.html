@@ -3199,6 +3199,7 @@ function rankFrom(lat,lon,label,fromMemory){
       ' <span class="chg" id="chgorigin">Change</span>';
     collapsePicker();
     renderWhereAmI(lat, lon);
+    try{ chanHud(); }catch(_e){}
     return;
   }
   lsSet("rcbOrigin", JSON.stringify({y:lat, x:lon, l:label}));
@@ -4887,6 +4888,9 @@ function tripFix(p){
     /* Redrawing the map on every fix cost 33 ms each even when the map was
        not on screen - and trip mode fires continuously while driving. Only
        repaint what the user can actually see. */
+    /* chanChip is a few DOM writes and the header is always visible, so it
+       always runs. Only the map repaint is gated - that was the 33 ms. */
+    try{ chanChip(); }catch(_e){}
     if($("mapsheet").classList.contains("on")){ mapOrigin(); chanHud(); }
   }catch(_e){}
   /* A watch can still be delivering fixes after the user switches trip mode

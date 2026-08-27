@@ -1,5 +1,5 @@
 {
-  "build": "2026-08-26-2340",
+  "build": "2026-08-26-2358",
   "released": "26 August 2026",
-  "notes": "Channel indicator and the trunk phone button now use your real position."
+  "notes": "Channel indicator now updates when you set a location by hand, and while driving."
 }
